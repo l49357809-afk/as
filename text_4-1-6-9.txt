@@ -10910,7 +10910,208 @@ LagswitchFFLAGToggleObject = MainTab:AddToggle("LagswitchFFLAGToggle", {
         end
     end,
 })
+-- === AUTO CROUCH MOVABLE BUTTON ===
+local autoCrouchEnabled = false
+local autoCrouchGui = Instance.new("ScreenGui")
+autoCrouchGui.Name = "AutoCrouchGui"
+autoCrouchGui.ResetOnSpawn = false
+autoCrouchGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+autoCrouchGui.IgnoreGuiInset = true
+autoCrouchGui.Parent = player:WaitForChild("PlayerGui")
 
+local crouchButton = Instance.new("TextButton")
+crouchButton.Name = "AUTOCROUCH"
+crouchButton.Size = UDim2.new(0, 100, 0, 55)
+crouchButton.Position = UDim2.new(1, -120, 0.5, 0)
+crouchButton.AnchorPoint = Vector2.new(0, 0)
+crouchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+crouchButton.BackgroundTransparency = 0.4
+crouchButton.Text = "CROUCH"
+crouchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+crouchButton.TextSize = 15
+crouchButton.Font = Enum.Font.GothamBold
+crouchButton.Visible = false
+crouchButton.Active = true
+crouchButton.Selectable = false
+crouchButton.AutoButtonColor = false
+crouchButton.ZIndex = 10
+crouchButton.Parent = autoCrouchGui
+
+local crouchCorner = Instance.new("UICorner")
+crouchCorner.CornerRadius = UDim.new(0, 10)
+crouchCorner.Parent = crouchButton
+
+local crouchStroke = Instance.new("UIStroke")
+crouchStroke.Color = Color3.fromRGB(80, 80, 80)
+crouchStroke.Thickness = 1.5
+crouchStroke.Parent = crouchButton
+
+-- STATE
+local crouchLocked = false
+local crouchDragging = false
+local crouchDragStart = nil
+local crouchStartPos = nil
+local crouchHoldToken = 0
+local CROUCH_HOLD_TIME = 3
+local CROUCH_MOVE_THRESHOLD = 25
+
+-- ========================
+-- CROUCH LOGIC (your original)
+-- ========================
+local function getCrouchBtn()
+    local lp = game.Players.LocalPlayer
+    local hud = lp.PlayerGui:FindFirstChild("Game") and lp.PlayerGui.Game:FindFirstChild("HUD")
+    if hud and hud:FindFirstChild("Mobile") and hud.Mobile:FindFirstChild("Right") then
+        return hud.Mobile.Right.Mobile:FindFirstChild("CrouchButton")
+    end
+    return nil
+end
+
+local function triggerCrouchBtn(btn)
+    if not btn then return end
+    pcall(function()
+        for _, connection in ipairs(getconnections(btn.MouseButton1Click)) do
+            connection:Fire()
+        end
+    end)
+    pcall(function()
+        for _, connection in ipairs(getconnections(btn.Activated)) do
+            connection:Fire()
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        if autoCrouchEnabled then
+            local crouchBtn = getCrouchBtn()
+            if crouchBtn and crouchBtn.Visible then
+                triggerCrouchBtn(crouchBtn)
+            end
+            task.wait(0.04)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+-- ========================
+-- BUTTON UI
+-- ========================
+local function updateCrouchAppearance()
+    if crouchLocked then
+        crouchButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        crouchButton.Text = "CROUCH"
+        crouchStroke.Color = Color3.fromRGB(255, 100, 100)
+    elseif autoCrouchEnabled then
+        crouchButton.BackgroundColor3 = Color3.fromRGB(40, 180, 40)
+        crouchButton.Text = "CROUCH ON"
+        crouchStroke.Color = Color3.fromRGB(100, 255, 100)
+    else
+        crouchButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        crouchButton.Text = "CROUCH"
+        crouchStroke.Color = Color3.fromRGB(80, 80, 80)
+    end
+end
+
+local function toggleAutoCrouch()
+    autoCrouchEnabled = not autoCrouchEnabled
+    if AutoCrouchToggleObject then
+        syncToggle(AutoCrouchToggleObject, autoCrouchEnabled)
+    end
+    updateCrouchAppearance()
+    Fluent:Notify({
+        Title = "Auto Crouch",
+        Content = autoCrouchEnabled and "Enabled" or "Disabled",
+        Duration = 1.2,
+    })
+end
+
+crouchButton.InputBegan:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and
+       input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+    crouchHoldToken += 1
+    local myToken = crouchHoldToken
+    local stillPressed = true
+    local startTime = tick()
+
+    crouchDragStart = input.Position
+    crouchStartPos = crouchButton.Position
+    crouchDragging = not crouchLocked
+
+    -- Hold 3 seconds -> lock / unlock
+    task.delay(CROUCH_HOLD_TIME, function()
+        if crouchHoldToken ~= myToken then return end
+        if not stillPressed then return end
+
+        crouchLocked = not crouchLocked
+        crouchDragging = false
+        updateCrouchAppearance()
+        Fluent:Notify({
+            Title = "Auto Crouch",
+            Content = crouchLocked and "Button locked in place" or "Button unlocked",
+            Duration = 1.5,
+        })
+    end)
+
+    input.Changed:Connect(function()
+        if input.UserInputState == Enum.UserInputState.End then
+            stillPressed = false
+            local wasDragging = crouchDragging
+            crouchHoldToken += 1
+            crouchDragging = false
+
+            local heldFor = tick() - startTime
+            local moved = 0
+            if crouchDragStart then
+                local dx = input.Position.X - crouchDragStart.X
+                local dy = input.Position.Y - crouchDragStart.Y
+                moved = math.sqrt(dx * dx + dy * dy)
+            end
+
+            -- Tap = toggle
+            if heldFor < CROUCH_HOLD_TIME and moved < CROUCH_MOVE_THRESHOLD and not wasDragging then
+                toggleAutoCrouch()
+            end
+        end
+    end)
+end)
+
+local function onCrouchMove(input)
+    if not crouchDragging then return end
+    if crouchLocked then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement and
+       input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+    local delta = input.Position - crouchDragStart
+    crouchButton.Position = UDim2.new(
+        crouchStartPos.X.Scale, crouchStartPos.X.Offset + delta.X,
+        crouchStartPos.Y.Scale, crouchStartPos.Y.Offset + delta.Y
+    )
+end
+
+UIS.InputChanged:Connect(onCrouchMove)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or
+       input.UserInputType == Enum.UserInputType.MouseButton1 then
+        crouchHoldToken += 1
+        crouchDragging = false
+    end
+end)
+
+-- UI TOGGLE (shows / hides the button)
+AutoCrouchToggleObject = MainTab:AddToggle("AutoCrouchToggle", {
+    Title = "Auto Crouch",
+    Default = false,
+    Callback = function(value)
+        autoCrouchEnabled = value
+        crouchButton.Visible = value
+        updateCrouchAppearance()
+    end,
+})
+-- === END AUTO CROUCH BUTTON ===
 local SPECIAL_ROUND_NAMES = {
     "Slasher",
     "No Jumping",
